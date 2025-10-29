@@ -1,0 +1,6 @@
+# Ignore all personal config files
+*.yml
+
+# But track this .gitignore itself
+!.gitignore
+```

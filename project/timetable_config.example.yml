@@ -1,0 +1,52 @@
+# Timetable Generator Configuration File
+# This is an example configuration. Copy to config/timetable_config.yml with your own configurations to use.
+
+# Semester configuration
+semester:
+  type: odd  # Options: 'odd' or 'even'
+  valid_odd:
+  - 1
+  - 3
+  - 5
+  - 7
+  valid_even:
+  - 2
+  - 4
+  - 6
+  - 8
+
+# Optional constraints (true = enabled, false = disabled)
+constraints:
+  # Ensures practical sessions occupy 2 consecutive hour slots
+  practical_consecutive: true
+  
+  # Limits how many hours students/teachers can have without a break
+  max_consecutive_classes: true
+  
+  # Limits total class hours per day for students
+  max_daily_hours: true
+  
+  # Limits total teaching hours per day for teachers
+  max_daily_teacher_hours: true
+  
+  # Tries to schedule classes earlier in the day (soft constraint)
+  early_completion: true
+
+# Numeric limits for constraints (only apply if constraint is enabled)
+limits:
+  # Maximum consecutive hours without break (1-9)
+  max_consecutive_classes: 3
+  
+  # Maximum hours per day for students (1-9)
+  max_daily_hours: 6
+  
+  # Maximum teaching hours per day for teachers (1-9)
+  max_daily_teacher_hours: 6
+
+# Solver configuration (advanced settings)
+solver:
+  # Maximum time in seconds for solver to find solution
+  time_limit_seconds: 300
+  
+  # Maximum teaching hours per teacher per week
+  max_teacher_hours_per_week: 16

@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyc
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# Project specific - ALL versions
+*/config/*.yml
+*/config/timetable_config.yml
+project/config/*.yml
+older_versions/*/config/*.yml
+*/output/
+*/__pycache__/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+
+# Don't ignore example configs
+!**/timetable_config.example.yml
