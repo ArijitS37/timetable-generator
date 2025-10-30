@@ -28,10 +28,12 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                    # Run with existing config
-  python main.py --configure        # Reconfigure settings interactively
+  python main.py                    # Run automatically with saved config
+  python main.py --interactive      # Step-by-step mode with confirmations
+  python main.py --configure        # Configure constraint settings
   python main.py --show-config      # Display current configuration
   python main.py --semester even    # Override semester type
+  python main.py -i -s odd          # Interactive mode with odd semester
         """
     )
     
@@ -57,6 +59,12 @@ Examples:
         '--config-file',
         default='config/timetable_config.yml',
         help='Path to configuration file (default: config/timetable_config.yml)'
+    )
+    
+    parser.add_argument(
+        '--interactive', '-i',
+        action='store_true',
+        help='Run in fully interactive mode (asks for confirmation at each step)'
     )
     
     return parser.parse_args()
@@ -114,10 +122,30 @@ def main():
         print("\n✅ Configuration updated! Run again without --configure to generate timetable.")
         return
     
+    # Interactive mode: Ask for confirmation before each major step
+    interactive = args.interactive
+    
     # Override semester type if provided
     if args.semester:
         config_mgr.set('semester.type', args.semester)
         print(f"📅 Semester type overridden to: {args.semester.upper()}")
+    
+    # Interactive: Ask to review/change config
+    if interactive:
+        print("\n" + "=" * 70)
+        print("🔧 INTERACTIVE MODE")
+        print("=" * 70)
+        config_mgr.print_current_config()
+        
+        while True:
+            choice = input("\nDo you want to change configuration? (y/n) [n]: ").strip().lower()
+            if choice == "" or choice == "n":
+                break
+            elif choice == "y":
+                config_mgr.interactive_configure()
+                break
+            else:
+                print("Invalid input. Enter 'y' or 'n'")
     
     # Step 1: Load and validate input data
     print("📋 STEP 1: DATA LOADING AND VALIDATION")
@@ -149,6 +177,19 @@ def main():
     # Print comprehensive data summary
     data_loader.print_data_summary()
     
+    # Interactive: Confirm before continuing
+    if interactive:
+        print("\n" + "=" * 70)
+        while True:
+            choice = input("Continue to feasibility check? (y/n) [y]: ").strip().lower()
+            if choice == "" or choice == "y":
+                break
+            elif choice == "n":
+                print("❌ Process stopped by user")
+                return
+            else:
+                print("Invalid input. Enter 'y' or 'n'")
+    
     # Step 1.5: PRE-SOLVER FEASIBILITY CHECK
     print("\n" + "=" * 70)
     print("📋 STEP 1.5: PRE-SOLVER FEASIBILITY CHECK")
@@ -166,6 +207,19 @@ def main():
         print("   The solver will NOT find a solution with these problems.")
         print("\n🔧 If you need help, review the specific error messages above.")
         return
+    
+    # Interactive: Confirm before model building
+    if interactive:
+        print("\n" + "=" * 70)
+        while True:
+            choice = input("Continue to model building and solving? (y/n) [y]: ").strip().lower()
+            if choice == "" or choice == "y":
+                break
+            elif choice == "n":
+                print("❌ Process stopped by user")
+                return
+            else:
+                print("Invalid input. Enter 'y' or 'n'")
     
     # Step 2: Display configuration being used
     print("\n" + "=" * 70)

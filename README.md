@@ -1,8 +1,130 @@
 # College Timetable Generator
 
-Professional constraint-based timetable generation system using OR-Tools CP-SAT solver.
+Professional constraint-based timetable generation system using OR-Tools.
 
-## 📁 Repository Structure
+## 🚀 Quick Start
+
+### First Time Users (Recommended)
+```bash
+# 1. Setup virtual environment
+python setup_venv.py
+
+# 2. Activate it
+venv\Scripts\activate        # Windows
+source venv/bin/activate     # Mac/Linux
+
+# 3. Navigate to project
+cd project
+
+# 4. Run in interactive mode (walks you through everything)
+python main.py --interactive
+```
+
+### Regular Users
+```bash
+cd project
+python main.py  # Automatic mode with saved configuration
+```
+
+---
+
+## 📖 Usage
+```bash
+cd project
+
+# Interactive mode (step-by-step with confirmations)
+python main.py --interactive
+python main.py -i              # Short form
+
+# Normal usage (automatic)
+python main.py
+
+# Configuration
+python main.py --configure     # Update constraint settings
+python main.py --show-config   # View current settings
+
+# Override semester temporarily
+python main.py --semester odd
+python main.py --semester even
+
+# Combinations
+python main.py -i --semester odd  # Interactive with semester override
+
+# Help
+python main.py --help
+```
+
+---
+
+## 🎯 Usage Modes Explained
+
+| Mode | Command | Best For |
+|------|---------|----------|
+| **Interactive** | `python main.py --interactive` | First-time users, reviewing data before generation |
+| **Automatic** | `python main.py` | Regular use once configured |
+| **Configure** | `python main.py --configure` | Changing constraint settings only |
+| **Show Config** | `python main.py --show-config` | Checking current configuration |
+
+### Interactive Mode Features:
+- ✅ Review/change configuration before running
+- ✅ Pause after data validation summary
+- ✅ Confirm before starting solver
+- ✅ Full control at each step
+
+---
+
+## ✨ Features
+
+- ✅ Constraint-based optimization (OR-Tools CP-SAT)
+- ✅ Support for multiple subject types (DSC, DSE, GE, SEC, VAC, AEC)
+- ✅ Teacher workload balancing (max 16h/week)
+- ✅ Room assignment with capacity matching
+- ✅ Split teaching and course merging support
+- ✅ Configurable constraints (max consecutive hours, daily limits)
+- ✅ Professional YAML-based configuration
+- ✅ Interactive and automatic modes
+- ✅ Command-line interface
+
+---
+
+## 📂 Output
+
+Generated timetables are saved in `output/`:
+- `master_timetable.xlsx` - Complete schedule (Excel)
+- `teachers/` - Individual teacher schedules (PDF)
+- `rooms/` - Room utilization schedules (PDF)
+- `courses/` - Course-semester schedules (PDF)
+
+---
+
+## 🔧 Configuration
+
+Settings stored in `config/timetable_config.yml` (auto-generated).
+
+See `timetable_config.example.yml` for reference.
+
+### Configuration Options:
+- Semester type (odd/even)
+- Practical consecutive slots
+- Max consecutive classes
+- Max daily hours (students/teachers)
+- Early completion optimization
+
+---
+
+## 📦 Requirements
+
+- Python 3.7+
+- OR-Tools
+- pandas, openpyxl
+- PyYAML
+- reportlab
+
+See `requirements.txt` for full list.
+
+---
+
+## 🗂️ Repository Structure
 ```
 Timetable_Generator/
 ├── project/              ← Current working version (use this!)
@@ -10,86 +132,14 @@ Timetable_Generator/
 └── requirements.txt      ← Python dependencies
 ```
 
-## 🚀 Quick Start
-
-### 1. Setup Virtual Environment (Recommended)
-```bash
-# One-time setup
-python setup_venv.py
-
-# Activate (do this every time you work)
-source venv/bin/activate     # Mac/Linux
-venv\Scripts\activate        # Windows
-```
-
-### 2. Configure & Generate
-```bash
-cd project
-python main.py --configure  # First time
-python main.py              # Generate timetable
-```
-
-### 3. Deactivate When Done
-```bash
-deactivate
-```
-
 ---
 
-## 🔄 Alternative: Manual Setup
+## 💡 Tips
 
-If you prefer not to use virtual environment:
-```bash
-pip install -r requirements.txt
-cd project
-python main.py --configure
-python main.py
-```
+**For first-time users:** Use `--interactive` mode to understand the workflow.
 
-## 📖 Usage
-```bash
-cd project
+**For regular use:** Just run `python main.py` - it remembers your settings.
 
-# Normal usage
-python main.py              # Generate with saved settings
+**To change settings:** Run `python main.py --configure` anytime.
 
-# Configuration
-python main.py --configure  # Update settings
-python main.py --show-config # View current settings
-
-# Override semester temporarily
-python main.py --semester odd
-python main.py --semester even
-
-# Help
-python main.py --help
-```
-
-## 📂 Output
-
-Generated timetables saved in `project/output/`:
-- `master_timetable.xlsx` - Complete schedule (Excel)
-- `teachers/` - Individual teacher PDFs
-- `rooms/` - Room utilization PDFs  
-- `courses/` - Course-semester PDFs
-
-## 🔧 Configuration
-
-Settings stored in `project/config/timetable_config.yml` (auto-generated).
-
-Example config in `project/timetable_config.example.yml`.
-
-## 📦 Dependencies
-
-- Python 3.7+
-- OR-Tools (constraint solver)
-- pandas, openpyxl (data processing)
-- PyYAML (configuration)
-- reportlab (PDF generation)
-
-See `requirements.txt` for full list.
-
-## 🗂️ Version History
-
-Previous iterations available in `older_versions/` for reference.
-Always use `project/` for latest version.
+**Testing different semesters:** Use `--semester odd` or `--semester even` without changing saved config.

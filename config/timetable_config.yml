@@ -1,0 +1,25 @@
+semester:
+  type: odd
+  valid_odd:
+  - 1
+  - 3
+  - 5
+  - 7
+  valid_even:
+  - 2
+  - 4
+  - 6
+  - 8
+constraints:
+  practical_consecutive: true
+  max_consecutive_classes: true
+  max_daily_hours: true
+  max_daily_teacher_hours: true
+  early_completion: true
+limits:
+  max_consecutive_classes: 3
+  max_daily_hours: 6
+  max_daily_teacher_hours: 6
+solver:
+  time_limit_seconds: 300
+  max_teacher_hours_per_week: 16

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Automated virtual environment setup for Timetable Generator
 Run once: python setup_venv.py

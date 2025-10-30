@@ -1,5 +1,11 @@
 # Timetable Generator Configuration File
 # This is an example configuration. Copy to config/timetable_config.yml with your own configurations to use.
+#
+# This file is auto-generated when you run:
+#   python main.py --configure      (configure only)
+#   python main.py --interactive    (full interactive mode)
+#
+# You can also edit this file manually.
 
 # Semester configuration
 semester:
