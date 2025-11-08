@@ -42,6 +42,11 @@ class ConstraintBuilder:
         self._add_room_assignment_constraints(model, variables)
         self._add_theory_can_use_labs(model, variables)
         self._add_teacher_clash(model, variables)
+
+        if self.constraint_selector.is_enabled("practical_consecutive"):
+            print(f"   Adding practical consecutive slot constraints (with 2-hour block tracking)")
+            self._add_practical_consecutive(model, variables)
+        
         self._add_room_clash(model, variables)
         self._add_course_semester_clash(model, variables)
         self._add_teacher_load(model, variables)
@@ -50,26 +55,24 @@ class ConstraintBuilder:
         self._add_split_teaching_no_concurrency(model, variables)
         
         # OPTIONAL CONSTRAINTS (user-configured)
-        if self.constraint_selector.is_enabled("practical_consecutive"):
-            print(f"   ✅ Adding practical consecutive slot constraints (with 2-hour block tracking)")
-            self._add_practical_consecutive(model, variables)
+
         
         if self.constraint_selector.is_enabled("max_consecutive_classes"):
-            print(f"   ✅ Adding max consecutive classes constraint ({self.constraint_selector.get_max_consecutive_hours()}h)")
+            print(f"   Adding max consecutive classes constraint ({self.constraint_selector.get_max_consecutive_hours()}h)")
             self._add_max_consecutive_classes(model, variables)
         
         if self.constraint_selector.is_enabled("max_daily_hours"):
-            print(f"   ✅ Adding max daily hours for students ({self.constraint_selector.get_max_daily_hours_students()}h)")
+            print(f"   Adding max daily hours for students ({self.constraint_selector.get_max_daily_hours_students()}h)")
             self._add_max_daily_hours_students(model, variables)
         
         if self.constraint_selector.is_enabled("max_daily_teacher_hours"):
-            print(f"   ✅ Adding max daily hours for teachers ({self.constraint_selector.get_max_daily_hours_teachers()}h)")
+            print(f"   Adding max daily hours for teachers ({self.constraint_selector.get_max_daily_hours_teachers()}h)")
             self._add_max_daily_hours_teachers(model, variables)
         
         # OBJECTIVE FUNCTION
         self._add_objective_function(model, variables)
         
-        print("✅ Model built successfully")
+        print("Model built successfully")
         return model, variables
     
     def _build_subject_id(self, subj: Dict) -> str:
@@ -82,11 +85,8 @@ class ConstraintBuilder:
         Returns:
             Unique subject identifier string
         """
-        if subj.get("Is_Split_Teaching", False):
-            teacher_initials = self.teacher_initials.get(subj["Teacher"], "UNK")
-            return f"{subj['Course_Semester']}_{subj['Subject']}_{teacher_initials}"
-        else:
-            return f"{subj['Course_Semester']}_{subj['Subject']}"
+        teacher_initials = self.teacher_initials.get(subj["Teacher"], "UNK")
+        return f"{subj['Course_Semester']}_{subj['Subject']}_{teacher_initials}"
     
     def _get_allowed_slots_for_subject(self, subj: Dict) -> Set[int]:
         """
@@ -222,7 +222,6 @@ class ConstraintBuilder:
         # ROOM ASSIGNMENT VARIABLES
         # ================================================================
         classrooms = Config.get_rooms_by_type("classroom")
-        all_labs = [name for name, info in Config.ROOMS.items() if info["type"] == "lab"]
         
         for subj in self.subjects:
             subject_id = self._build_subject_id(subj)
@@ -240,7 +239,7 @@ class ConstraintBuilder:
             # Lecture room assignments (classrooms + department labs as backup)
             if subj["Taught_Lecture_hours"] > 0:
                 # Get department-specific labs for backup
-                dept_labs = Config.get_labs_by_department(subj["Department"]) if subj["Department"] in Config.DEPARTMENT_LABS.values() else []
+                dept_labs = Config.get_labs_by_department(subj["Department"]) if subj["Department"] in Config.DEPARTMENT_LABS.keys() else []
                 
                 for t in lecture_tutorial_slots:
                     for room in classrooms:
@@ -315,7 +314,12 @@ class ConstraintBuilder:
                     
                     var_name_under = f"penalty_under_prac_{clean_id}_{t}"
                     variables['room_penalty'][(subject_id, t, 'undersized_lab')] = model.NewIntVar(0, 1000, var_name_under)
-        print("\n   🔍 DEBUG: Variable creation summary:")
+
+            # Create penalty for theory in lab
+            # var_name = f"penalty_lab_{clean_id}_{t}"
+            # variables['room_penalty'][(subject_id, t, 'theory_in_lab')] = model.NewIntVar(0, 1000, var_name)
+
+        print("\n   DEBUG: Variable creation summary:")
         for subj in self.subjects:
             subject_id = self._build_subject_id(subj)
             lec_count = sum(1 for t in range(len(self.time_slots)) if (subject_id, t) in variables['lecture'])
@@ -325,7 +329,7 @@ class ConstraintBuilder:
             print(f"      Subject: {subj['Subject'][:30]}")
             print(f"         Teacher: {subj['Teacher']}")
             print(f"         Is_Split_Teaching: {subj.get('Is_Split_Teaching', False)}")
-            print(f"         subject_id: {subject_id}")  # ✅ Full ID not truncated
+            print(f"         subject_id: {subject_id}")
             print(f"         Taught: Le={subj.get('Taught_Lecture_hours', 0)}, Tu={subj.get('Taught_Tutorial_hours', 0)}, Pr={subj.get('Taught_Practical_hours', 0)}")
             print(f"         Variables: Le={lec_count}, Tu={tut_count}, Pr={prac_count}")
             print()
@@ -340,7 +344,7 @@ class ConstraintBuilder:
         """
         Ensure each subject schedules exactly the required hours.
         - Lectures: mandatory, must meet taught hours
-        - Tutorials: mandatory, must meet taught hours (no longer optional)
+        - Tutorials: mandatory, must meet taught hours
         - Practicals: mandatory, must meet taught hours
         """
         for subj in self.subjects:
@@ -357,7 +361,7 @@ class ConstraintBuilder:
                 if lecture_vars:
                     model.Add(sum(lecture_vars) == subj["Taught_Lecture_hours"])
             
-            # TUTORIALS (mandatory - no longer optional)
+            # TUTORIALS (mandatory)
             if subj["Tutorial_hours"] > 0:
                 tutorial_vars = [
                     variables['tutorial'][(subject_id, t)] 
@@ -384,7 +388,7 @@ class ConstraintBuilder:
         Ensure each scheduled class is assigned to exactly one room.
         Also calculates room size mismatch penalties.
         """
-        print("   ✅ Adding room assignment constraints")
+        print("   Adding room assignment constraints")
         
         for subj in self.subjects:
             subject_id = self._build_subject_id(subj)
@@ -612,15 +616,16 @@ class ConstraintBuilder:
             class_type: 'lecture' or 'tutorial'
         """
         # Get department-specific labs
-        dept_labs = Config.get_labs_by_department(department) if department in Config.DEPARTMENT_LABS.values() else []
-        
-        # Create penalty variable if it doesn't exist
+        dept_labs = Config.get_labs_by_department(department) if department in Config.DEPARTMENT_LABS.keys() else []
+
+        # Create penalty variable
         if (subject_id, time, 'theory_in_lab') not in variables['room_penalty']:
+            # print(1)
             clean_id = subject_id.replace("-", "_").replace(" ", "_").replace(".", "")
             var_name = f"penalty_lab_{clean_id}_{time}"
             variables['room_penalty'][(subject_id, time, 'theory_in_lab')] = model.NewIntVar(0, 1000, var_name)
-        
         penalty_var = variables['room_penalty'][(subject_id, time, 'theory_in_lab')]
+        # print(penalty_var)
         
         # Check if any lab is being used
         lab_usage_vars = []
@@ -644,7 +649,7 @@ class ConstraintBuilder:
         Allow theory classes (lectures/tutorials) to use labs as backup when classrooms are full.
         This provides flexibility in room assignment.
         """
-        print("   ✅ Adding theory-can-use-labs flexibility")
+        print("   Adding theory-can-use-labs flexibility")
         
         # Note: Room assignment variables for labs are already created in _create_variables()
         # This method is kept for clarity/documentation, but the actual flexibility
@@ -699,13 +704,13 @@ class ConstraintBuilder:
             for teacher, classes_at_t in teacher_classes.items():
                 if classes_at_t:
                     model.Add(sum(classes_at_t) <= 1)
-    
+
     def _add_room_clash(self, model: cp_model.CpModel, variables: Dict):
         """
         Each specific room can only host one class at a time.
         For practicals with 2-hour blocks, accounts for block occupancy.
         """
-        print("   ✅ Adding room clash prevention")
+        print("   Adding room clash prevention")
         
         for t in range(len(self.time_slots)):
             # ==============================================================
@@ -744,7 +749,7 @@ class ConstraintBuilder:
                     # Case 2: 2-hour practical started at t-1 and occupies t
                     # Only if practical_consecutive constraint is enabled and forms actual 2-hour block
                     if (self.constraint_selector.is_enabled("practical_consecutive") and 
-                        self._is_consecutive_slot(t) and t > 0):
+                        self._is_consecutive_slot(t)):
                         
                         if (subject_id, t - 1) in variables.get('practical_is_2hour_block', {}):
                             block_var = variables['practical_is_2hour_block'][(subject_id, t - 1)]
@@ -785,10 +790,10 @@ class ConstraintBuilder:
                     
                     subject_id = self._build_subject_id(subj)
                     
-                    # ✅ Only skip duplicate entries for MERGED courses
+                    # Only skip duplicate entries for MERGED courses
                     # (Split teaching entries should ALL be included)
                     merge_group_id = subj.get("Merge_Group_ID")
-                    
+
                     if merge_group_id and merge_group_id in processed_merge_groups:
                         continue
                     
@@ -804,7 +809,6 @@ class ConstraintBuilder:
                     
                     if (subject_id, t) in variables['practical']:
                         classes_at_t.append(variables['practical'][(subject_id, t)])
-                
                 if classes_at_t:
                     # At most 1 class at time t for this course-semester
                     model.Add(sum(classes_at_t) <= 1)
@@ -891,7 +895,7 @@ class ConstraintBuilder:
         
         NOTE: For practicals, we allow different labs to accommodate large student counts.
         """
-        print("   ✅ Adding merged course synchronization")
+        print("   Adding merged course synchronization")
         
         # Group subjects by merge_group_id
         merge_groups = {}
@@ -904,7 +908,7 @@ class ConstraintBuilder:
         
         # For each merge group, enforce synchronization
         for merge_id, subjects_in_group in merge_groups.items():
-            if len(subjects_in_group) < 2:
+            if len(subjects_in_group) <= 1:
                 continue
             
             # Calculate combined student count
@@ -1002,17 +1006,17 @@ class ConstraintBuilder:
         Teachers in the same split teaching group cannot teach at the same time.
         They're teaching different portions of the same subject to the same students.
         """
-        print("   ✅ Adding split teaching no-concurrency constraint")
+        print("   Adding split teaching no-concurrency constraint")
         
         # Group subjects by Split_Group_ID
         split_groups = {}
         for subj in self.subjects:
-            split_id = subj.get("Split_Group_ID")
+            split_id = subj.get("split_group_id")
             if split_id:
                 if split_id not in split_groups:
                     split_groups[split_id] = []
                 split_groups[split_id].append(subj)
-        
+
         # For each split group, prevent concurrent scheduling
         for split_id, subjects_in_group in split_groups.items():
             if len(subjects_in_group) < 2:
@@ -1045,11 +1049,11 @@ class ConstraintBuilder:
         Creates explicit helper variables to track actual 2-hour blocks.
         Allows 1-hour isolated blocks as fallback with penalty.
         
-        Penalty: 50 points per isolated practical hour (Option A - stronger incentive).
+        Penalty: 50 points per isolated practical hour
         
         This constraint also enforces that 2-hour blocks must use the same room.
         """
-        print("   ✅ Adding practical consecutive preference (soft constraint with 2-hour block tracking)")
+        print("   Adding practical consecutive preference (soft constraint with 2-hour block tracking)")
         
         # Create helper variables for 2-hour blocks
         variables['practical_is_2hour_block'] = {}
@@ -1111,7 +1115,7 @@ class ConstraintBuilder:
             
             # ================================================================
             # Step 3: Add penalties for isolated (non-2-hour) practicals
-            # Penalty per isolated hour (Option A)
+            # Penalty per isolated hour
             # ================================================================
             for t in range(len(self.time_slots)):
                 if (subject_id, t) not in variables['practical']:
@@ -1275,10 +1279,10 @@ class ConstraintBuilder:
         - Day usage (prefer earlier days in week)
         - Latest slot used (prefer ending classes early)
         """
-        print("   ✅ Adding objective function")
+        print("   Adding objective function")
         
         # ================================================================
-        # 1. Room Penalties (ALWAYS ON)
+        # 1. Room Penalties
         # ================================================================
         total_room_penalty = sum(
             variables['room_penalty'].get((subject_id, t, penalty_type), 0)
@@ -1286,7 +1290,7 @@ class ConstraintBuilder:
         )
         
         # ================================================================
-        # 2. GE Practical using Regular GE Lecture Slots Penalty (ALWAYS ON)
+        # 2. GE Practical using Regular GE Lecture Slots Penalty
         # ================================================================
         ge_lecture_penalty = 0
         for subj in self.subjects:
@@ -1314,7 +1318,7 @@ class ConstraintBuilder:
         # 4. Early Completion Objective (if enabled)
         # ================================================================
         if self.constraint_selector.is_enabled("early_completion"):
-            print("   ✅ Adding early completion objective (minimize day usage + latest slot)")
+            print("   Adding early completion objective (minimize day usage + latest slot)")
             
             # Track which days are used
             day_used = {}
@@ -1366,11 +1370,11 @@ class ConstraintBuilder:
                         day_idx = t // len(self.slots)
                         model.Add(day_used[day_idx] == 1).OnlyEnforceIf(has_class)
             
-            # Day penalty: prefer earlier days (Mon=0, Tue=1, ..., Sat=5)
-            day_penalty = sum(
-                day_used[day_idx] * day_idx * len(self.slots) * 2  # Higher weight for later days
-                for day_idx in range(len(Config.DAYS))
-            )
+            # # Day penalty: prefer earlier days (Mon=0, Tue=1, ..., Sat=5)
+            # day_penalty = sum(
+            #     day_used[day_idx] * day_idx * len(self.slots) * 2  # Higher weight for later days
+            #     for day_idx in range(len(Config.DAYS))
+            # )
             
             # Slot penalty: prefer ending earlier in the day
             slot_penalty = variables['max_used_slot']
@@ -1380,7 +1384,7 @@ class ConstraintBuilder:
                 total_room_penalty + 
                 ge_lecture_penalty + 
                 total_practical_penalty + 
-                day_penalty + 
+                # day_penalty + 
                 slot_penalty
             )
         else:
