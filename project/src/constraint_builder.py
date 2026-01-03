@@ -7,7 +7,7 @@ from src.config import Config
 from typing import List, Dict, Any, Tuple, Set
 import pandas as pd
 
-class ConstraintBuilder:
+class ConstraintBuilder: 
     def __init__(self, subjects: List[Dict], teachers: List[str], rooms: List[str], 
                  course_semesters: List[str], room_capacities: Dict[str, Dict],
                  constraint_selector,  # ConfigAdapter from main.py
@@ -87,6 +87,17 @@ class ConstraintBuilder:
             return f"{subj['Course_Semester']}_{subj['Subject']}_{teacher_initials}"
         else:
             return f"{subj['Course_Semester']}_{subj['Subject']}"
+        
+    def _get_event_id(self, subj: Dict) -> str:
+        """
+        Returns the scheduling event ID.
+        Merged courses share ONE event_id.
+        """
+        if subj.get("Merge_Group_ID"):
+            return f"MERGE_{subj['Merge_Group_ID']}"
+        else:
+            return self._build_subject_id(subj)
+
     
     def _get_allowed_slots_for_subject(self, subj: Dict) -> Set[int]:
         """
@@ -101,8 +112,8 @@ class ConstraintBuilder:
         """
         subject_type = subj["Subject_type"]
         semester = subj["Semester"]
-        all_slots = set(range(len(self.time_slots)))
-        
+        all_slots = set(range(len(self.time_slots))) # Mon 8:30-9:30 is 0,...., Sat 16:30-17:30 is 53
+
         # Get semester-specific fixed slot types
         semester_fixed_types = Config.get_fixed_slot_types_for_semester(semester)
         
@@ -110,7 +121,7 @@ class ConstraintBuilder:
             # Fixed slot subjects (GE/SEC/VAC/AEC) - ONLY their specific slots
             if subject_type == "GE":
                 # GE lectures/tutorials: only GE lecture slots
-                return set(Config.get_fixed_slot_indices("GE"))
+                return set(Config.get_fixed_slot_indices("GE")) # {4, 13, 22, 31, 40, 49}, all 12:30-13:30 slots
             
             elif subject_type in ["SEC", "VAC"]:
                 # SEC/VAC: their year-specific slots
@@ -156,9 +167,11 @@ class ConstraintBuilder:
         """
         Create all decision variables for the optimization model.
         Only creates variables for slots where scheduling is actually allowed.
-        
-        Returns:
-            Dictionary containing all variable types
+
+        NOTE:
+        - Uses event_id instead of subject_id
+        - Merged courses share the SAME event variables
+        - Duplicate guards prevent re-creation
         """
         variables = {
             'lecture': {},
@@ -168,67 +181,67 @@ class ConstraintBuilder:
             'room_penalty': {},
             'max_used_slot': model.NewIntVar(0, len(self.time_slots) - 1, "max_used_slot")
         }
-        
+
         print("   📊 Creating decision variables (efficient slot-aware creation)...")
-        
+
         # Counters for summary
         lecture_count = 0
         tutorial_count = 0
         practical_count = 0
         room_count = 0
-        
+
+        # ================================================================
+        # CLASS VARIABLES (LECTURE / TUTORIAL / PRACTICAL)
+        # ================================================================
         for subj in self.subjects:
-            subject_id = self._build_subject_id(subj)
-            clean_id = subject_id.replace("-", "_").replace(" ", "_").replace(".", "")
-            
-            # Get allowed slots for this subject
+            event_id = self._get_event_id(subj)
+            clean_id = event_id.replace("-", "_").replace(" ", "_").replace(".", "")
+
+            # Allowed slots
             if subj.get("Is_GE_Lab", False):
-                # GE Lab practicals have special slot rules
                 lecture_tutorial_slots = self._get_allowed_slots_for_subject(subj)
                 practical_slots = self._get_allowed_slots_for_ge_practical(subj["Semester"])
             else:
                 allowed_slots = self._get_allowed_slots_for_subject(subj)
                 lecture_tutorial_slots = allowed_slots
                 practical_slots = allowed_slots
-            
-            # ================================================================
-            # LECTURE VARIABLES (only for allowed slots)
-            # ================================================================
+
+            # ---------------- LECTURES ----------------
             if subj["Taught_Lecture_hours"] > 0:
                 for t in lecture_tutorial_slots:
-                    var_name = f"lec_{clean_id}_{t}"
-                    variables['lecture'][(subject_id, t)] = model.NewBoolVar(var_name)
-                    lecture_count += 1
-            
-            # ================================================================
-            # TUTORIAL VARIABLES (only for allowed slots, always mandatory)
-            # ================================================================
+                    key = (event_id, t)
+                    if key not in variables['lecture']:
+                        var_name = f"lec_{clean_id}_{t}"
+                        variables['lecture'][key] = model.NewBoolVar(var_name)
+                        lecture_count += 1
+
+            # ---------------- TUTORIALS ----------------
             if subj["Taught_Tutorial_hours"] > 0:
                 for t in lecture_tutorial_slots:
-                    var_name = f"tut_{clean_id}_{t}"
-                    variables['tutorial'][(subject_id, t)] = model.NewBoolVar(var_name)
-                    tutorial_count += 1
-            
-            # ================================================================
-            # PRACTICAL VARIABLES (only for allowed slots)
-            # ================================================================
+                    key = (event_id, t)
+                    if key not in variables['tutorial']:
+                        var_name = f"tut_{clean_id}_{t}"
+                        variables['tutorial'][key] = model.NewBoolVar(var_name)
+                        tutorial_count += 1
+
+            # ---------------- PRACTICALS ----------------
             if subj["Taught_Practical_hours"] > 0:
                 for t in practical_slots:
-                    var_name = f"prac_{clean_id}_{t}"
-                    variables['practical'][(subject_id, t)] = model.NewBoolVar(var_name)
-                    practical_count += 1
-        
+                    key = (event_id, t)
+                    if key not in variables['practical']:
+                        var_name = f"prac_{clean_id}_{t}"
+                        variables['practical'][key] = model.NewBoolVar(var_name)
+                        practical_count += 1
+
         # ================================================================
         # ROOM ASSIGNMENT VARIABLES
         # ================================================================
         classrooms = Config.get_rooms_by_type("classroom")
-        all_labs = [name for name, info in Config.ROOMS.items() if info["type"] == "lab"]
-        
+
         for subj in self.subjects:
-            subject_id = self._build_subject_id(subj)
-            clean_id = subject_id.replace("-", "_").replace(" ", "_").replace(".", "")
-            
-            # Get allowed slots
+            event_id = self._get_event_id(subj)
+            clean_id = event_id.replace("-", "_").replace(" ", "_").replace(".", "")
+
             if subj.get("Is_GE_Lab", False):
                 lecture_tutorial_slots = self._get_allowed_slots_for_subject(subj)
                 practical_slots = self._get_allowed_slots_for_ge_practical(subj["Semester"])
@@ -236,60 +249,77 @@ class ConstraintBuilder:
                 allowed_slots = self._get_allowed_slots_for_subject(subj)
                 lecture_tutorial_slots = allowed_slots
                 practical_slots = allowed_slots
-            
-            # Lecture room assignments (classrooms + department labs as backup)
+
+            # -------- Lecture rooms --------
             if subj["Taught_Lecture_hours"] > 0:
-                # Get department-specific labs for backup
-                dept_labs = Config.get_labs_by_department(subj["Department"]) if subj["Department"] in Config.DEPARTMENT_LABS.values() else []
-                
+                dept_labs = (
+                    Config.get_labs_by_department(subj["Department"])
+                    if subj["Department"] in Config.DEPARTMENT_LABS.values()
+                    else []
+                )
+
                 for t in lecture_tutorial_slots:
                     for room in classrooms:
-                        room_clean = room.replace("-", "_")
-                        var_name = f"room_{clean_id}_{t}_{room_clean}_lec"
-                        variables['room_assignment'][(subject_id, t, room, 'lecture')] = model.NewBoolVar(var_name)
-                        room_count += 1
-                    
-                    # Only use department-specific labs as backup
+                        key = (event_id, t, room, 'lecture')
+                        if key not in variables['room_assignment']:
+                            room_clean = room.replace("-", "_")
+                            var_name = f"room_{clean_id}_{t}_{room_clean}_lec"
+                            variables['room_assignment'][key] = model.NewBoolVar(var_name)
+                            room_count += 1
+
                     for lab in dept_labs:
-                        lab_clean = lab.replace("-", "_")
-                        var_name = f"room_{clean_id}_{t}_{lab_clean}_lec"
-                        variables['room_assignment'][(subject_id, t, lab, 'lecture')] = model.NewBoolVar(var_name)
-                        room_count += 1
-            
-            # Tutorial room assignments (classrooms + labs as backup)
+                        key = (event_id, t, lab, 'lecture')
+                        if key not in variables['room_assignment']:
+                            lab_clean = lab.replace("-", "_")
+                            var_name = f"room_{clean_id}_{t}_{lab_clean}_lec"
+                            variables['room_assignment'][key] = model.NewBoolVar(var_name)
+                            room_count += 1
+
+            # -------- Tutorial rooms --------
             if subj["Taught_Tutorial_hours"] > 0:
+                dept_labs = (
+                    Config.get_labs_by_department(subj["Department"])
+                    if subj["Department"] in Config.DEPARTMENT_LABS.values()
+                    else []
+                )
+
                 for t in lecture_tutorial_slots:
                     for room in classrooms:
-                        room_clean = room.replace("-", "_")
-                        var_name = f"room_{clean_id}_{t}_{room_clean}_tut"
-                        variables['room_assignment'][(subject_id, t, room, 'tutorial')] = model.NewBoolVar(var_name)
-                        room_count += 1
-                    
+                        key = (event_id, t, room, 'tutorial')
+                        if key not in variables['room_assignment']:
+                            room_clean = room.replace("-", "_")
+                            var_name = f"room_{clean_id}_{t}_{room_clean}_tut"
+                            variables['room_assignment'][key] = model.NewBoolVar(var_name)
+                            room_count += 1
+
                     for lab in dept_labs:
-                        lab_clean = lab.replace("-", "_")
-                        var_name = f"room_{clean_id}_{t}_{lab_clean}_tut"
-                        variables['room_assignment'][(subject_id, t, lab, 'tutorial')] = model.NewBoolVar(var_name)
-                        room_count += 1
-            
-            # Practical room assignments (department-specific labs only)
+                        key = (event_id, t, lab, 'tutorial')
+                        if key not in variables['room_assignment']:
+                            lab_clean = lab.replace("-", "_")
+                            var_name = f"room_{clean_id}_{t}_{lab_clean}_tut"
+                            variables['room_assignment'][key] = model.NewBoolVar(var_name)
+                            room_count += 1
+
+            # -------- Practical rooms --------
             if subj["Taught_Practical_hours"] > 0:
                 available_labs = Config.get_labs_by_department(subj["Department"])
-                
+
                 for t in practical_slots:
                     for lab in available_labs:
-                        lab_clean = lab.replace("-", "_")
-                        var_name = f"room_{clean_id}_{t}_{lab_clean}_prac"
-                        variables['room_assignment'][(subject_id, t, lab, 'practical')] = model.NewBoolVar(var_name)
-                        room_count += 1
-        
+                        key = (event_id, t, lab, 'practical')
+                        if key not in variables['room_assignment']:
+                            lab_clean = lab.replace("-", "_")
+                            var_name = f"room_{clean_id}_{t}_{lab_clean}_prac"
+                            variables['room_assignment'][key] = model.NewBoolVar(var_name)
+                            room_count += 1
+
         # ================================================================
-        # ROOM PENALTY VARIABLES (for size mismatch)
+        # ROOM PENALTY VARIABLES
         # ================================================================
         for subj in self.subjects:
-            subject_id = self._build_subject_id(subj)
-            clean_id = subject_id.replace("-", "_").replace(" ", "_").replace(".", "")
-            
-            # Get allowed slots
+            event_id = self._get_event_id(subj)
+            clean_id = event_id.replace("-", "_").replace(" ", "_").replace(".", "")
+
             if subj.get("Is_GE_Lab", False):
                 theory_slots = self._get_allowed_slots_for_subject(subj)
                 practical_slots = self._get_allowed_slots_for_ge_practical(subj["Semester"])
@@ -297,85 +327,101 @@ class ConstraintBuilder:
                 allowed_slots = self._get_allowed_slots_for_subject(subj)
                 theory_slots = allowed_slots
                 practical_slots = allowed_slots
-            
-            # Penalties for theory classes (lectures/tutorials)
+
             if subj["Lecture_hours"] > 0 or subj["Tutorial_hours"] > 0:
                 for t in theory_slots:
-                    var_name_over = f"penalty_over_{clean_id}_{t}"
-                    variables['room_penalty'][(subject_id, t, 'oversized')] = model.NewIntVar(0, 1000, var_name_over)
-                    
-                    var_name_under = f"penalty_under_{clean_id}_{t}"
-                    variables['room_penalty'][(subject_id, t, 'undersized')] = model.NewIntVar(0, 1000, var_name_under)
-            
-            # Penalties for practical classes (labs)
+                    key_over = (event_id, t, 'oversized')
+                    key_under = (event_id, t, 'undersized')
+
+                    if key_over not in variables['room_penalty']:
+                        variables['room_penalty'][key_over] = model.NewIntVar(
+                            0, 1000, f"penalty_over_{clean_id}_{t}"
+                        )
+                    if key_under not in variables['room_penalty']:
+                        variables['room_penalty'][key_under] = model.NewIntVar(
+                            0, 1000, f"penalty_under_{clean_id}_{t}"
+                        )
+
             if subj["Practical_hours"] > 0:
                 for t in practical_slots:
-                    var_name_over = f"penalty_over_prac_{clean_id}_{t}"
-                    variables['room_penalty'][(subject_id, t, 'oversized_lab')] = model.NewIntVar(0, 1000, var_name_over)
-                    
-                    var_name_under = f"penalty_under_prac_{clean_id}_{t}"
-                    variables['room_penalty'][(subject_id, t, 'undersized_lab')] = model.NewIntVar(0, 1000, var_name_under)
-        print("\n   🔍 DEBUG: Variable creation summary:")
-        for subj in self.subjects:
-            subject_id = self._build_subject_id(subj)
-            lec_count = sum(1 for t in range(len(self.time_slots)) if (subject_id, t) in variables['lecture'])
-            tut_count = sum(1 for t in range(len(self.time_slots)) if (subject_id, t) in variables['tutorial'])
-            prac_count = sum(1 for t in range(len(self.time_slots)) if (subject_id, t) in variables['practical'])
-            
-            print(f"      Subject: {subj['Subject'][:30]}")
-            print(f"         Teacher: {subj['Teacher']}")
-            print(f"         Is_Split_Teaching: {subj.get('Is_Split_Teaching', False)}")
-            print(f"         subject_id: {subject_id}")  # ✅ Full ID not truncated
-            print(f"         Taught: Le={subj.get('Taught_Lecture_hours', 0)}, Tu={subj.get('Taught_Tutorial_hours', 0)}, Pr={subj.get('Taught_Practical_hours', 0)}")
-            print(f"         Variables: Le={lec_count}, Tu={tut_count}, Pr={prac_count}")
-            print()
+                    key_over = (event_id, t, 'oversized_lab')
+                    key_under = (event_id, t, 'undersized_lab')
+
+                    if key_over not in variables['room_penalty']:
+                        variables['room_penalty'][key_over] = model.NewIntVar(
+                            0, 1000, f"penalty_over_prac_{clean_id}_{t}"
+                        )
+                    if key_under not in variables['room_penalty']:
+                        variables['room_penalty'][key_under] = model.NewIntVar(
+                            0, 1000, f"penalty_under_prac_{clean_id}_{t}"
+                        )
+
         print(f"      • Lectures: {lecture_count}")
         print(f"      • Tutorials: {tutorial_count}")
-        print(f"      • Practicals: {practical_count} (individual hours)")
+        print(f"      • Practicals: {practical_count}")
         print(f"      • Room assignments: {room_count}")
-        
+
         return variables
-    
+
     def _add_hour_requirements(self, model: cp_model.CpModel, variables: Dict):
         """
-        Ensure each subject schedules exactly the required hours.
-        - Lectures: mandatory, must meet taught hours
-        - Tutorials: mandatory, must meet taught hours (no longer optional)
-        - Practicals: mandatory, must meet taught hours
+        Ensure each scheduling EVENT meets exactly the required teaching hours.
+
+        IMPORTANT DESIGN:
+        - Merged courses are treated as ONE event → hours enforced once
+        - Non-merged courses behave exactly as before
+        - This constraint FORCES the solver to schedule classes
         """
+
+        processed_merge_groups = set()
+
         for subj in self.subjects:
-            subject_id = self._build_subject_id(subj)
-            
+            merge_id = subj.get("Merge_Group_ID")
+
+            # 🔹 For merged courses: enforce hours only ONCE
+            if merge_id:
+                if merge_id in processed_merge_groups:
+                    continue
+                processed_merge_groups.add(merge_id)
+
+            event_id = self._get_event_id(subj)
+
+            # ================================================================
             # LECTURES (mandatory)
+            # ================================================================
             if subj["Lecture_hours"] > 0:
                 lecture_vars = [
-                    variables['lecture'][(subject_id, t)] 
+                    variables['lecture'][(event_id, t)]
                     for t in range(len(self.time_slots))
-                    if (subject_id, t) in variables['lecture']
+                    if (event_id, t) in variables['lecture']
                 ]
-                
+
                 if lecture_vars:
                     model.Add(sum(lecture_vars) == subj["Taught_Lecture_hours"])
-            
-            # TUTORIALS (mandatory - no longer optional)
+
+            # ================================================================
+            # TUTORIALS (mandatory)
+            # ================================================================
             if subj["Tutorial_hours"] > 0:
                 tutorial_vars = [
-                    variables['tutorial'][(subject_id, t)] 
+                    variables['tutorial'][(event_id, t)]
                     for t in range(len(self.time_slots))
-                    if (subject_id, t) in variables['tutorial']
+                    if (event_id, t) in variables['tutorial']
                 ]
-                
+
                 if tutorial_vars:
                     model.Add(sum(tutorial_vars) == subj["Taught_Tutorial_hours"])
-            
+
+            # ================================================================
             # PRACTICALS (mandatory)
+            # ================================================================
             if subj["Practical_hours"] > 0:
                 practical_vars = [
-                    variables['practical'][(subject_id, t)] 
+                    variables['practical'][(event_id, t)]
                     for t in range(len(self.time_slots))
-                    if (subject_id, t) in variables['practical']
+                    if (event_id, t) in variables['practical']
                 ]
-                
+
                 if practical_vars:
                     model.Add(sum(practical_vars) == subj["Taught_Practical_hours"])
     

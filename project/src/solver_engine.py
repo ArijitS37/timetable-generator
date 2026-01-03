@@ -14,7 +14,15 @@ class SolverEngine:
         self.solver = cp_model.CpSolver()
         self.solution = None
         self.room_assignments = {}  # Track specific room assignments
-    
+
+    def _get_event_id(self, subj: Dict) -> str:
+        """
+        Must mirror ConstraintBuilder exactly.
+        """
+        if subj.get("Merge_Group_ID"):
+            return f"MERGE_{subj['Merge_Group_ID']}"
+        return self._build_subject_id(subj)
+ 
     def _build_subject_id(self, subj: Dict) -> str:
         """
         Build consistent subject_id, handling split teaching with teacher initials.
@@ -54,11 +62,10 @@ class SolverEngine:
         """Post-processing: Assign assistant teachers to labs based on 1:20 ratio"""
         print("\n🔧 Assigning assistant teachers to lab classes...")
         
-        # Track teacher availability and workload
         teacher_availability = {}  # {teacher: {time_slot: is_free}}
-        teacher_workload = {}  # {teacher: hours_assigned}
+        teacher_workload = {}      # {teacher: hours_assigned}
         
-        # Initialize teacher data
+        # Collect all teachers
         all_teachers = set()
         for subj in self.subjects:
             all_teachers.add(subj["Teacher"])
@@ -67,222 +74,162 @@ class SolverEngine:
         
         for teacher in all_teachers:
             teacher_workload[teacher] = 0
-            teacher_availability[teacher] = {t: True for t in range(len(solution['time_slots']))}
+            teacher_availability[teacher] = {
+                t: True for t in range(len(solution['time_slots']))
+            }
         
-        # Mark times when teachers are busy (from main teaching)
+        # Mark busy slots from scheduled classes
         for day, day_schedule in solution['master_schedule'].items():
             for slot, classes in day_schedule.items():
-                # Find time slot index
-                time_idx = None
-                for idx, (d, s) in enumerate(solution['time_slots']):
-                    if d == day and s == slot:
-                        time_idx = idx
-                        break
-                
+                time_idx = next(
+                    (i for i, (d, s) in enumerate(solution['time_slots']) if d == day and s == slot),
+                    None
+                )
                 if time_idx is None:
                     continue
                 
                 for class_info in classes:
-                    # Mark all teachers in this class as busy
                     for teacher in class_info['teachers_list']:
                         teacher_availability[teacher][time_idx] = False
-                        
-                        # Count workload for taught hours
                         teacher_workload[teacher] += 1
         
-        # Now assign assistants to labs that need them
-        assistant_assignments = {}  # {(subject_id, time): [list of assistant teachers]}
+        assistant_assignments = {}  # {(event_id, time_idx): [assistants]}
         
         for subj in self.subjects:
             if subj["Practical_hours"] == 0:
                 continue
             
-            subject_id = self._build_subject_id(subj)
+            event_id = self._get_event_id(subj)
             student_count = subj["Students_count"]
             main_teacher = subj["Teacher"]
             department = subj["Department"]
             
-            # Calculate teachers needed (1:20 ratio)
-            teachers_needed = (student_count + Config.LAB_TEACHER_RATIO - 1) // Config.LAB_TEACHER_RATIO
+            teachers_needed = (
+                student_count + Config.LAB_TEACHER_RATIO - 1
+            ) // Config.LAB_TEACHER_RATIO
             
-            # Main teacher counts as 1
             assistants_needed = teachers_needed - 1
-            
             if assistants_needed <= 0:
                 continue
             
-            # Find when this lab is scheduled
             for day, day_schedule in solution['master_schedule'].items():
                 for slot, classes in day_schedule.items():
                     for class_info in classes:
-                        if (class_info['subject'] == subj['Subject'] and 
+                        if (
+                            class_info['subject'] == subj['Subject'] and
                             class_info['course_semester'] == subj['Course_Semester'] and
                             class_info['type'] == 'Practical' and
-                            not class_info.get('is_continuation', False)):
-                            
-                            # This is the start of a practical session
-                            # Find time indices for both hours
-                            start_time_idx = None
-                            for idx, (d, s) in enumerate(solution['time_slots']):
-                                if d == day and s == slot:
-                                    start_time_idx = idx
-                                    break
-                            
+                            not class_info.get('is_continuation', False)
+                        ):
+                            start_time_idx = next(
+                                (i for i, (d, s) in enumerate(solution['time_slots']) if d == day and s == slot),
+                                None
+                            )
                             if start_time_idx is None:
                                 continue
                             
                             practical_hours = [start_time_idx, start_time_idx + 1]
                             
-                            # Find available teachers from same department
                             available_teachers = []
                             for teacher in all_teachers:
                                 if teacher == main_teacher:
-                                    continue  # Main teacher already assigned
+                                    continue
                                 
-                                # Check if teacher is from same department
-                                teacher_dept = None
-                                for s in self.subjects:
-                                    if s["Teacher"] == teacher:
-                                        teacher_dept = s["Department"]
-                                        break
-                                
+                                teacher_dept = next(
+                                    (s["Department"] for s in self.subjects if s["Teacher"] == teacher),
+                                    None
+                                )
                                 if teacher_dept != department:
                                     continue
                                 
-                                # Check if under 16 hours
-                                if teacher_workload.get(teacher, 0) >= Config.MAX_HOURS_PER_TEACHER:
+                                if teacher_workload[teacher] >= Config.MAX_HOURS_PER_TEACHER:
                                     continue
                                 
-                                # Check availability for practical hours
-                                is_available = all(
-                                    teacher_availability[teacher].get(h, False)
-                                    for h in practical_hours
-                                )
-                                
-                                if is_available:
+                                if all(teacher_availability[teacher].get(h, False) for h in practical_hours):
                                     available_teachers.append(teacher)
                             
-                            # Sort by current workload (assign to those with fewer hours first)
-                            available_teachers.sort(key=lambda t: teacher_workload.get(t, 0))
+                            available_teachers.sort(key=lambda t: teacher_workload[t])
                             
-                            # Assign assistants
-                            assigned_assistants = []
-                            for i in range(min(assistants_needed, len(available_teachers))):
-                                asst_teacher = available_teachers[i]
-                                assigned_assistants.append(asst_teacher)
-                                
-                                # Mark as busy for these hours
+                            assigned = []
+                            for teacher in available_teachers[:assistants_needed]:
+                                assigned.append(teacher)
                                 for h in practical_hours:
-                                    teacher_availability[asst_teacher][h] = False
-                                
-                                # Add to workload (2 hours for lab)
-                                teacher_workload[asst_teacher] += 2
+                                    teacher_availability[teacher][h] = False
+                                teacher_workload[teacher] += 2
                             
-                            # Store assignment
-                            key = (subject_id, start_time_idx)
-                            assistant_assignments[key] = assigned_assistants
+                            assistant_assignments[(event_id, start_time_idx)] = assigned
                             
-                            # Check if we couldn't fill all positions
-                            if len(assigned_assistants) < assistants_needed:
-                                shortage = assistants_needed - len(assigned_assistants)
-                                print(f"   ⚠️  {subj['Subject']} [{subj['Course_Semester']}]: "
-                                    f"Needs {teachers_needed} teachers, assigned {len(assigned_assistants) + 1}, "
-                                    f"short {shortage} assistant(s)")
+                            if len(assigned) < assistants_needed:
+                                print(
+                                    f"   ⚠️  {subj['Subject']} [{subj['Course_Semester']}]: "
+                                    f"needs {teachers_needed} teachers, assigned {len(assigned) + 1}"
+                                )
         
-        # Update solution with assistant info
         solution['assistant_assignments'] = assistant_assignments
         solution['teacher_workload_after_assistants'] = teacher_workload
-        
         return solution
     
     def _extract_solution(self) -> Dict:
         time_slots = Config.get_time_slots()
         slots = Config.get_slots_list()
-        
-        # Build master schedule with room assignments
+
         master_schedule = {}
-        
-        # Track room usage per time slot for assignment
         room_usage = {}
-        
-        # Track which teachers are present at each time slot for each subject
-        # Format: {(subject_id, time_slot): [list of teachers]}
+
+        # {(event_id, time_slot): [teachers]}
         teachers_at_slot = {}
-        
-        # First pass: Determine which teachers are present at which times
+
+        # ================================================================
+        # FIRST PASS: determine which teachers are present at each event+slot
+        # ================================================================
         for subj in self.subjects:
-            subject_id = self._build_subject_id(subj)
+            event_id = self._get_event_id(subj)
             main_teacher = subj["Teacher"]
-            
-            # Check all time slots
+
             for t in range(len(time_slots)):
-                teachers_present = []
-                
-                # Main teacher always present if any class at this time
                 is_class_at_t = False
-                
-                # Check lectures
-                if (subject_id, t) in self.variables['lecture']:
-                    if self.solver.Value(self.variables['lecture'][(subject_id, t)]) == 1:
-                        is_class_at_t = True
-                
-                # Check tutorials
-                if (subject_id, t) in self.variables['tutorial']:
-                    if self.solver.Value(self.variables['tutorial'][(subject_id, t)]) == 1:
-                        is_class_at_t = True
-                
-                # Check practicals - main teacher present for all hours
-                if (subject_id, t) in self.variables['practical']:
-                    if self.solver.Value(self.variables['practical'][(subject_id, t)]) == 1:
-                        is_class_at_t = True
-                
+
+                if (event_id, t) in self.variables['lecture'] and self.solver.Value(self.variables['lecture'][(event_id, t)]) == 1:
+                    is_class_at_t = True
+
+                if (event_id, t) in self.variables['tutorial'] and self.solver.Value(self.variables['tutorial'][(event_id, t)]) == 1:
+                    is_class_at_t = True
+
+                if (event_id, t) in self.variables['practical'] and self.solver.Value(self.variables['practical'][(event_id, t)]) == 1:
+                    is_class_at_t = True
+
                 if is_class_at_t:
-                    teachers_present.append(main_teacher)
-                    
-                    # Check co-teachers
-                    for co_teacher in subj.get("Co_Teachers", []):
-                        teachers_present.append(co_teacher)
-                    
-                    if teachers_present:
-                        teachers_at_slot[(subject_id, t)] = teachers_present
-        
-        # Second pass: Build schedule with proper teacher lists
-        
-        # Process lectures
-        for (subject_id, t), var in self.variables['lecture'].items():
+                    teachers = [main_teacher] + subj.get("Co_Teachers", [])
+                    teachers_at_slot[(event_id, t)] = teachers
+
+        # ================================================================
+        # SECOND PASS: build master schedule
+        # ================================================================
+
+        # ---------------- LECTURES ----------------
+        for (event_id, t), var in self.variables['lecture'].items():
             if self.solver.Value(var) == 1:
                 day, slot = time_slots[t]
-                subj_details = self._get_subject_details(subject_id)
-                
-                # Get teachers for this slot
-                teachers = teachers_at_slot.get((subject_id, t), [subj_details['Teacher']])
+                subj_details = self._get_subject_details_by_event(event_id)
+
+                teachers = teachers_at_slot.get((event_id, t), [subj_details["Teacher"]])
                 teacher_str = ", ".join(teachers)
-                
-                # Assign specific classroom
-                room_number = self._assign_room(t, "Classroom", room_usage)
-                
-                if day not in master_schedule:
-                    master_schedule[day] = {}
-                if slot not in master_schedule[day]:
-                    master_schedule[day][slot] = []
-                
-                # Find which room was assigned
+
                 assigned_room = "Room-TBD"
                 for room in Config.get_rooms_by_type("classroom"):
-                    if (subject_id, t, room, 'lecture') in self.variables['room_assignment']:
-                        if self.solver.Value(self.variables['room_assignment'][(subject_id, t, room, 'lecture')]) == 1:
+                    if (event_id, t, room, 'lecture') in self.variables['room_assignment']:
+                        if self.solver.Value(self.variables['room_assignment'][(event_id, t, room, 'lecture')]) == 1:
                             assigned_room = room
                             break
 
-                # Check if using lab instead
                 if assigned_room == "Room-TBD":
-                    for lab in [name for name, info in Config.ROOMS.items() if info["type"] == "lab"]:
-                        if (subject_id, t, lab, 'lecture') in self.variables['room_assignment']:
-                            if self.solver.Value(self.variables['room_assignment'][(subject_id, t, lab, 'lecture')]) == 1:
+                    for lab in [r for r, info in Config.ROOMS.items() if info["type"] == "lab"]:
+                        if (event_id, t, lab, 'lecture') in self.variables['room_assignment']:
+                            if self.solver.Value(self.variables['room_assignment'][(event_id, t, lab, 'lecture')]) == 1:
                                 assigned_room = f"{lab} (Theory)"
                                 break
 
-                class_info = {
+                master_schedule.setdefault(day, {}).setdefault(slot, []).append({
                     'subject': subj_details['Subject'],
                     'teacher': teacher_str,
                     'teachers_list': teachers,
@@ -292,46 +239,32 @@ class SolverEngine:
                     'room_type': 'Classroom' if 'R-' in assigned_room else 'Lab',
                     'subject_type': subj_details['Subject_type'],
                     'section': subj_details['Section']
-                }
-                
-                # ✅ FIX: Actually append to master_schedule!
-                master_schedule[day][slot].append(class_info)
-        
-        # Process tutorials
-        for (subject_id, t), var in self.variables['tutorial'].items():
+                })
+
+        # ---------------- TUTORIALS ----------------
+        for (event_id, t), var in self.variables['tutorial'].items():
             if self.solver.Value(var) == 1:
                 day, slot = time_slots[t]
-                subj_details = self._get_subject_details(subject_id)
-                
-                # Get teachers for this slot
-                teachers = teachers_at_slot.get((subject_id, t), [subj_details['Teacher']])
+                subj_details = self._get_subject_details_by_event(event_id)
+
+                teachers = teachers_at_slot.get((event_id, t), [subj_details["Teacher"]])
                 teacher_str = ", ".join(teachers)
-                
-                # Assign specific classroom
-                room_number = self._assign_room(t, "Classroom", room_usage)
-                
-                if day not in master_schedule:
-                    master_schedule[day] = {}
-                if slot not in master_schedule[day]:
-                    master_schedule[day][slot] = []
-                
-                # Find which room was assigned
+
                 assigned_room = "Room-TBD"
                 for room in Config.get_rooms_by_type("classroom"):
-                    if (subject_id, t, room, 'tutorial') in self.variables['room_assignment']:
-                        if self.solver.Value(self.variables['room_assignment'][(subject_id, t, room, 'tutorial')]) == 1:
+                    if (event_id, t, room, 'tutorial') in self.variables['room_assignment']:
+                        if self.solver.Value(self.variables['room_assignment'][(event_id, t, room, 'tutorial')]) == 1:
                             assigned_room = room
                             break
 
-                # Check if using lab instead
                 if assigned_room == "Room-TBD":
-                    for lab in [name for name, info in Config.ROOMS.items() if info["type"] == "lab"]:
-                        if (subject_id, t, lab, 'tutorial') in self.variables['room_assignment']:
-                            if self.solver.Value(self.variables['room_assignment'][(subject_id, t, lab, 'tutorial')]) == 1:
+                    for lab in [r for r, info in Config.ROOMS.items() if info["type"] == "lab"]:
+                        if (event_id, t, lab, 'tutorial') in self.variables['room_assignment']:
+                            if self.solver.Value(self.variables['room_assignment'][(event_id, t, lab, 'tutorial')]) == 1:
                                 assigned_room = f"{lab} (Theory)"
                                 break
 
-                class_info = {
+                master_schedule.setdefault(day, {}).setdefault(slot, []).append({
                     'subject': subj_details['Subject'],
                     'teacher': teacher_str,
                     'teachers_list': teachers,
@@ -341,80 +274,49 @@ class SolverEngine:
                     'room_type': 'Classroom' if 'R-' in assigned_room else 'Lab',
                     'subject_type': subj_details['Subject_type'],
                     'section': subj_details['Section']
-                }
-                
-                # ✅ FIX: Actually append to master_schedule!
-                master_schedule[day][slot].append(class_info)
-        
-        # Process practicals (2-hour sessions) - this part was already correct
-        for (subject_id, t), var in self.variables['practical'].items():
+                })
+
+        # ---------------- PRACTICALS ----------------
+        for (event_id, t), var in self.variables['practical'].items():
             if self.solver.Value(var) == 1:
-                day, slot = time_slots[t]
-                subj_details = self._get_subject_details(subject_id)
-                lab_type = subj_details['Lab_type']
-                
-                # Find which lab(s) were assigned
-                assigned_labs = []
+                subj_details = self._get_subject_details_by_event(event_id)
                 available_labs = Config.get_labs_by_department(subj_details["Department"])
+                assigned_labs = []
 
                 for lab in available_labs:
-                    if (subject_id, t, lab, 'practical') in self.variables['room_assignment']:
-                        if self.solver.Value(self.variables['room_assignment'][(subject_id, t, lab, 'practical')]) == 1:
+                    if (event_id, t, lab, 'practical') in self.variables['room_assignment']:
+                        if self.solver.Value(self.variables['room_assignment'][(event_id, t, lab, 'practical')]) == 1:
                             assigned_labs.append(lab)
 
-                # Format room names
-                if len(assigned_labs) == 1:
-                    room_name = assigned_labs[0]
-                elif len(assigned_labs) > 1:
-                    room_name = ", ".join(assigned_labs)
-                else:
-                    room_name = f"{lab_type}-TBD"
+                room_name = ", ".join(assigned_labs) if assigned_labs else f"{subj_details['Lab_type']}-TBD"
 
-                # Add to both consecutive slots
                 for offset in [0, 1]:
                     if t + offset < len(time_slots):
-                        day_offset, slot_offset = time_slots[t + offset]
-                        
-                        # Get teachers for THIS specific hour
-                        teachers = teachers_at_slot.get((subject_id, t + offset), [subj_details['Teacher']])
-                        teacher_str = ", ".join(teachers)
-                        
-                        if day_offset not in master_schedule:
-                            master_schedule[day_offset] = {}
-                        if slot_offset not in master_schedule[day_offset]:
-                            master_schedule[day_offset][slot_offset] = []
-                        
-                        class_info = {
+                        day, slot = time_slots[t + offset]
+                        teachers = teachers_at_slot.get((event_id, t + offset), [subj_details["Teacher"]])
+
+                        master_schedule.setdefault(day, {}).setdefault(slot, []).append({
                             'subject': subj_details['Subject'],
-                            'teacher': teacher_str,
+                            'teacher': ", ".join(teachers),
                             'teachers_list': teachers,
                             'course_semester': subj_details['Course_Semester'],
                             'type': 'Practical',
                             'room': room_name,
-                            'room_type': lab_type,
+                            'room_type': subj_details['Lab_type'],
                             'subject_type': subj_details['Subject_type'],
                             'section': subj_details['Section'],
                             'is_continuation': offset == 1
-                        }
-                        master_schedule[day_offset][slot_offset].append(class_info)
-        
-        # Check which tutorials were scheduled
-        tutorials_scheduled = {}
-        for subject_id, var in self.variables.get('tutorial_used', {}).items():
-            tutorials_scheduled[subject_id] = self.solver.Value(var) == 1
-        
-        solution = {
+                        })
+
+        return {
             'master_schedule': master_schedule,
             'solver': self.solver,
             'variables': self.variables,
-            'max_used_slot': self.solver.Value(self.variables['max_used_slot']) if 'max_used_slot' in self.variables else -1,
+            'max_used_slot': self.solver.Value(self.variables['max_used_slot']),
             'time_slots': time_slots,
             'slots': slots,
-            'tutorials_scheduled': tutorials_scheduled,
             'room_assignments': room_usage
         }
-        
-        return solution
     
     def _assign_room(self, time_slot: int, room_type: str, room_usage: Dict) -> int:
         """Assign a specific room number for a class"""
@@ -441,13 +343,23 @@ class SolverEngine:
         # If all rooms used, assign overflow (shouldn't happen with proper constraints)
         return total_rooms
     
-    def _get_subject_details(self, subject_id: str) -> Dict:
-        """Get subject details from subject_id"""
-        for subj in self.subjects:
-            if self._build_subject_id(subj) == subject_id:
-                return subj
+    def _get_subject_details_by_event(self, event_id: str) -> Dict:
+        """
+        Returns representative subject details for an event.
+        For merged events, returns the first matching subject.
+        """
+        if event_id.startswith("MERGE_"):
+            merge_group_id = event_id.replace("MERGE_", "")
+            for subj in self.subjects:
+                if subj.get("Merge_Group_ID") == merge_group_id:
+                    return subj
+        else:
+            for subj in self.subjects:
+                if self._build_subject_id(subj) == event_id:
+                    return subj
+
         return {}
-    
+ 
     def _diagnose_failure(self, status: int):
         """Provide diagnostic information for failed solutions"""
         if status == cp_model.INFEASIBLE:
@@ -489,10 +401,19 @@ class SolverEngine:
         total_practicals = sum(
             self.solver.Value(var) for var in self.variables['practical'].values()
         )
-        
-        # Check tutorial sacrifices
+
         tutorials_total = len([s for s in self.subjects if s['Tutorial_hours'] > 0])
-        tutorials_scheduled = sum(1 for v in self.solution['tutorials_scheduled'].values() if v)
+
+        # Tutorials are mandatory now → scheduled if any tutorial var is 1
+        tutorials_scheduled = sum(
+            1 for s in self.subjects
+            if s['Tutorial_hours'] > 0 and any(
+                self.solver.Value(var) == 1
+                for (eid, _), var in self.variables['tutorial'].items()
+                if eid == self._get_event_id(s)
+            )
+        )
+
         tutorials_sacrificed = tutorials_total - tutorials_scheduled
         
         print(f"\n   📚 Classes Scheduled:")

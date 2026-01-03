@@ -229,7 +229,7 @@ class Config:
         },
         "B.Sc. (Hons) Computer Science": {
             1: {"A": 55}, 2: {"A": 53}, 3: {"A": 51}, 4: {"A": 49},
-            5: {"A": 47}, 6: {"A": 45}, 7: {"A": 30}, 8: {"A": 30}
+            5: {"A": 47}, 6: {"A": 45}, 7: {"A": 10}, 8: {"A": 30}
         },
         "B.Sc. (Hons) Electronics": {
             1: {"A": 50}, 2: {"A": 48}, 3: {"A": 46}, 4: {"A": 44},
@@ -287,7 +287,7 @@ class Config:
         },
         "B.A. Program": {
             1: {"A": 50}, 2: {"A": 48}, 3: {"A": 46}, 4: {"A": 44},
-            5: {"A": 42}, 6: {"A": 40}, 7: {"A": 38}, 8: {"A": 36}
+            5: {"A": 42}, 6: {"A": 40}, 7: {"A": 10}, 8: {"A": 36}
         },
         "B.Com (Hons)": {
             1: {"A": 65, "B": 63, "C": 61}, 2: {"A": 63, "B": 61, "C": 59},
@@ -321,7 +321,7 @@ class Config:
         },
         "SEC": {
             1: {
-                "IT Skills and Data Analysis 1": {"A": 70}
+                "IT Skills and Data Analysis 1": {"A": 30}
             },
             3: {
                 "IT Skills and Data Analysis 1": {"A": 70}
@@ -633,7 +633,7 @@ class Config:
             if semester in cls.COURSE_STRENGTHS[course]:
                 if section in cls.COURSE_STRENGTHS[course][semester]:
                     return cls.COURSE_STRENGTHS[course][semester][section]
-        return 30  # Default fallback
+        return 20  # Default fallback
     
     @classmethod
     def get_ge_sec_vac_strength(cls, subject_type: str, semester: int, subject_name: str, section: str) -> int:

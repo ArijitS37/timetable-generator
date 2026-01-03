@@ -157,7 +157,7 @@ def main():
     # Pass semester type to data loader
     semester_type = config_mgr.get('semester.type', 'odd')
     
-    data_loader = DataLoader("inputs/exceptions_input.xlsx")
+    data_loader = DataLoader("inputs/input3.xlsx")
     data_loader.semester_type = semester_type  # Set semester type before validation
     
     if not data_loader.validate_data():
@@ -175,7 +175,7 @@ def main():
     room_capacities = data_loader.get_room_capacities()
     
     # Print comprehensive data summary
-    data_loader.print_data_summary()
+    # data_loader.print_data_summary()
     
     # Interactive: Confirm before continuing
     if interactive:
@@ -197,7 +197,7 @@ def main():
     
     feasibility_checker = FeasibilityChecker(subjects, room_capacities)
     is_feasible, issues, warnings, stats = feasibility_checker.check_feasibility()
-    feasibility_checker.print_summary()
+    # feasibility_checker.print_summary()
     
     if not is_feasible:
         print("\n" + "=" * 70)
